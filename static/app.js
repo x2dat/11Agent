@@ -8,6 +8,9 @@ let currentCommand = null;
 let currentReason = null;
 let currentRisk = null;
 let chartCount = 0;
+let editingKeyId = null;
+let keysCache = [];
+let chatSessionModel = null;
 
 // Initialize on load
 document.addEventListener("DOMContentLoaded", () => {
@@ -97,17 +100,30 @@ async function checkDaemonStatus() {
 }
 
 // Load Settings from Backend
+// Load Settings from Backend
 async function loadSettings() {
     try {
         const res = await fetch(`${API_BASE}/api/settings`);
         if (res.ok) {
             const settings = await res.json();
             
+            keysCache = settings.api_keys || [];
+            
             // Render key list and select boxes
-            renderKeys(settings.api_keys || [], settings.active_gemini_key_id, settings.active_kimi_key_id);
+            renderKeys(keysCache, settings.active_gemini_key_id, settings.active_kimi_key_id, settings.active_openrouter_key_id);
             
             if (settings.model) {
                 document.getElementById("settings-model").value = settings.model;
+                
+                // Copy options to the header model select
+                const chatSelect = document.getElementById("chat-model-select");
+                if (chatSelect) {
+                    chatSelect.innerHTML = document.getElementById("settings-model").innerHTML;
+                    if (!chatSessionModel) {
+                        chatSessionModel = settings.model;
+                        chatSelect.value = chatSessionModel;
+                    }
+                }
             }
             if (settings.guardrail) {
                 document.getElementById("settings-guardrail").value = settings.guardrail;
@@ -118,7 +134,7 @@ async function loadSettings() {
     }
 }
 
-function renderKeys(apiKeys, activeGeminiId, activeKimiId) {
+function renderKeys(apiKeys, activeGeminiId, activeKimiId, activeOpenrouterId) {
     const listEl = document.getElementById("keys-list");
     listEl.innerHTML = "";
     
@@ -128,9 +144,11 @@ function renderKeys(apiKeys, activeGeminiId, activeKimiId) {
     
     const geminiSelect = document.getElementById("settings-active-gemini-key");
     const kimiSelect = document.getElementById("settings-active-kimi-key");
+    const openrouterSelect = document.getElementById("settings-active-openrouter-key");
     
     geminiSelect.innerHTML = `<option value="">None Selected</option>`;
     kimiSelect.innerHTML = `<option value="">None Selected</option>`;
+    openrouterSelect.innerHTML = `<option value="">None Selected</option>`;
     
     apiKeys.forEach(key => {
         // Render in manager list
@@ -145,9 +163,14 @@ function renderKeys(apiKeys, activeGeminiId, activeKimiId) {
                 </div>
                 <div class="key-masked-val">${escapeHtml(key.key)}</div>
             </div>
-            <button class="delete-chat-btn" onclick="deleteApiKey('${key.id}')" style="opacity: 1; padding: 4px;">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-            </button>
+            <div style="display: flex; gap: 6px;">
+                <button class="delete-chat-btn" onclick="editApiKey('${key.id}')" style="opacity: 1; padding: 4px; color: var(--text-secondary);" title="Edit Key Details">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+                <button class="delete-chat-btn" onclick="deleteApiKey('${key.id}')" style="opacity: 1; padding: 4px;" title="Delete Key">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                </button>
+            </div>
         `;
         listEl.appendChild(card);
         
@@ -162,8 +185,58 @@ function renderKeys(apiKeys, activeGeminiId, activeKimiId) {
         } else if (key.provider === "kimi") {
             if (key.id === activeKimiId) option.selected = true;
             kimiSelect.appendChild(option);
+        } else if (key.provider === "openrouter") {
+            if (key.id === activeOpenrouterId) option.selected = true;
+            openrouterSelect.appendChild(option);
         }
     });
+}
+
+function editApiKey(keyId) {
+    const keyObj = keysCache.find(k => k.id === keyId);
+    if (!keyObj) return;
+    
+    editingKeyId = keyId;
+    
+    document.getElementById("new-key-name").value = keyObj.name;
+    document.getElementById("new-key-provider").value = keyObj.provider;
+    document.getElementById("new-key-value").value = keyObj.key;
+    
+    const submitBtn = document.getElementById("add-key-submit-btn");
+    submitBtn.innerHTML = `<span>Save Key Changes</span>`;
+    submitBtn.className = "fluent-btn btn-primary";
+    
+    let cancelBtn = document.getElementById("cancel-edit-btn");
+    if (!cancelBtn) {
+        cancelBtn = document.createElement("button");
+        cancelBtn.id = "cancel-edit-btn";
+        cancelBtn.className = "fluent-btn btn-secondary";
+        cancelBtn.style.width = "100%";
+        cancelBtn.style.marginTop = "6px";
+        cancelBtn.innerText = "Cancel Edit";
+        cancelBtn.onclick = cancelApiKeyEdit;
+        submitBtn.parentNode.appendChild(cancelBtn);
+    }
+    
+    document.getElementById("new-key-name").focus();
+}
+
+function cancelApiKeyEdit() {
+    editingKeyId = null;
+    document.getElementById("new-key-name").value = "";
+    document.getElementById("new-key-value").value = "";
+    
+    const submitBtn = document.getElementById("add-key-submit-btn");
+    submitBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Add API Key</span>
+    `;
+    submitBtn.className = "fluent-btn btn-secondary";
+    
+    const cancelBtn = document.getElementById("cancel-edit-btn");
+    if (cancelBtn) {
+        cancelBtn.parentNode.removeChild(cancelBtn);
+    }
 }
 
 async function addNewApiKey() {
@@ -181,21 +254,28 @@ async function addNewApiKey() {
     }
     
     try {
-        const res = await fetch(`${API_BASE}/api/settings/keys`, {
-            method: "POST",
+        const url = editingKeyId ? `${API_BASE}/api/settings/keys/${editingKeyId}` : `${API_BASE}/api/settings/keys`;
+        const method = editingKeyId ? "PUT" : "POST";
+        
+        const res = await fetch(url, {
+            method: method,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name, provider, key })
         });
         
         if (res.ok) {
-            showToast("API Key added successfully!", "success");
-            nameEl.value = "";
-            valueEl.value = "";
+            showToast(editingKeyId ? "API Key updated successfully!" : "API Key added successfully!", "success");
+            if (editingKeyId) {
+                cancelApiKeyEdit();
+            } else {
+                nameEl.value = "";
+                valueEl.value = "";
+            }
             loadSettings();
             checkDaemonStatus();
         } else {
             const err = await res.json();
-            showToast(err.detail || "Failed to add API key.", "error");
+            showToast(err.detail || "Failed to save API key.", "error");
         }
     } catch (err) {
         showToast("Error communicating with daemon.", "error");
@@ -203,7 +283,7 @@ async function addNewApiKey() {
 }
 
 async function deleteApiKey(keyId) {
-    if (confirm("Are you sure you want to delete this API key?")) {
+    if (await showConfirmDialog("Delete API Key", "Are you sure you want to delete this API key? This action cannot be undone.")) {
         try {
             const res = await fetch(`${API_BASE}/api/settings/keys/${keyId}`, {
                 method: "DELETE"
@@ -226,6 +306,7 @@ async function deleteApiKey(keyId) {
 async function saveSettings() {
     const active_gemini_key_id = document.getElementById("settings-active-gemini-key").value;
     const active_kimi_key_id = document.getElementById("settings-active-kimi-key").value;
+    const active_openrouter_key_id = document.getElementById("settings-active-openrouter-key").value;
     const model = document.getElementById("settings-model").value;
     const guardrail = document.getElementById("settings-guardrail").value;
     
@@ -233,7 +314,7 @@ async function saveSettings() {
         const res = await fetch(`${API_BASE}/api/settings`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ active_gemini_key_id, active_kimi_key_id, model, guardrail })
+            body: JSON.stringify({ active_gemini_key_id, active_kimi_key_id, active_openrouter_key_id, model, guardrail })
         });
         
         if (res.ok) {
@@ -344,6 +425,12 @@ async function sendMessage() {
         const body = { prompt };
         if (chatSessionId) {
             body.session_id = chatSessionId;
+        }
+        
+        const modelSelect = document.getElementById("chat-model-select");
+        if (modelSelect && modelSelect.value) {
+            body.model = modelSelect.value;
+            chatSessionModel = modelSelect.value;
         }
         
         const res = await fetch(`${API_BASE}/api/prompt`, {
@@ -753,6 +840,14 @@ async function loadActiveChat(sessionId) {
             const chat = await res.json();
             chatSessionId = chat.session_id;
             
+            if (chat.model) {
+                chatSessionModel = chat.model;
+                const chatSelect = document.getElementById("chat-model-select");
+                if (chatSelect) {
+                    chatSelect.value = chatSessionModel;
+                }
+            }
+            
             // Clear messages container
             const container = document.getElementById("chat-messages");
             container.innerHTML = "";
@@ -786,7 +881,7 @@ async function loadActiveChat(sessionId) {
 }
 
 async function deleteChat(sessionId) {
-    if (confirm("Are you sure you want to delete this conversation?")) {
+    if (await showConfirmDialog("Delete Conversation", "Are you sure you want to delete this conversation? This will erase the message log permanently.")) {
         try {
             const res = await fetch(`${API_BASE}/api/conversations/${sessionId}`, { method: "DELETE" });
             if (res.ok) {
@@ -805,6 +900,17 @@ async function deleteChat(sessionId) {
 
 function startNewChat() {
     chatSessionId = null;
+    
+    // Reset to default model from settings if possible
+    const settingsModel = document.getElementById("settings-model");
+    if (settingsModel) {
+        chatSessionModel = settingsModel.value;
+        const chatSelect = document.getElementById("chat-model-select");
+        if (chatSelect) {
+            chatSelect.value = chatSessionModel;
+        }
+    }
+    
     document.getElementById("chat-messages").innerHTML = `
         <div class="message system-message">
             <div class="message-content">
@@ -823,4 +929,57 @@ function startNewChat() {
     });
     loadConversations();
     showToast("New chat session started.", "success");
+}
+
+async function changeChatModel() {
+    const modelSelect = document.getElementById("chat-model-select");
+    if (!modelSelect) return;
+    
+    chatSessionModel = modelSelect.value;
+    
+    if (chatSessionId) {
+        try {
+            await fetch(`${API_BASE}/api/conversations/${chatSessionId}/model`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: chatSessionModel })
+            });
+            showToast("Conversation model updated.", "success");
+        } catch (err) {
+            console.error("Failed to save conversation model:", err);
+        }
+    }
+}
+
+// Custom Promise-based Confirmation Dialog Modal
+function showConfirmDialog(title, message) {
+    return new Promise((resolve) => {
+        document.getElementById("confirm-modal-title").innerText = title;
+        document.getElementById("confirm-modal-message").innerText = message;
+        
+        const modal = document.getElementById("confirm-modal");
+        modal.classList.add("active");
+        
+        const confirmBtn = document.getElementById("confirm-modal-confirm-btn");
+        const cancelBtn = document.getElementById("confirm-modal-cancel-btn");
+        
+        const cleanup = () => {
+            modal.classList.remove("active");
+            // Remove event listeners to prevent duplicate triggers
+            const newConfirm = confirmBtn.cloneNode(true);
+            const newCancel = cancelBtn.cloneNode(true);
+            confirmBtn.parentNode.replaceChild(newConfirm, confirmBtn);
+            cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
+        };
+        
+        document.getElementById("confirm-modal-confirm-btn").addEventListener("click", () => {
+            cleanup();
+            resolve(true);
+        });
+        
+        document.getElementById("confirm-modal-cancel-btn").addEventListener("click", () => {
+            cleanup();
+            resolve(false);
+        });
+    });
 }

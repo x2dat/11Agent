@@ -51,8 +51,12 @@ config = {
     "api_key": "",
     "gemini_api_key": "",
     "kimi_api_key": "",
+    "openrouter_api_key": "",
     "model": "gemini-3.1-flash-lite",
-    "guardrail": "MAX"
+    "guardrail": "MAX",
+    "active_gemini_key_id": "",
+    "active_kimi_key_id": "",
+    "active_openrouter_key_id": ""
 }
 history_log = []
 sessions: Dict[str, Dict[str, Any]] = {}
@@ -62,6 +66,7 @@ active_window = None
 class SettingsUpdate(BaseModel):
     active_gemini_key_id: Optional[str] = ""
     active_kimi_key_id: Optional[str] = ""
+    active_openrouter_key_id: Optional[str] = ""
     model: str
     guardrail: str
 
@@ -73,6 +78,7 @@ class APIKeyAdd(BaseModel):
 class PromptRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = None
+    model: Optional[str] = None
 
 class ConfirmRequest(BaseModel):
     session_id: str
@@ -147,6 +153,8 @@ def save_conversations():
             data_to_save[session_id] = {
                 "title": title,
                 "timestamp": timestamp,
+                "model": session.get("model", config.get("model")),
+                "fallback_mode": session.get("fallback_mode", False),
                 "messages": [content_to_dict(msg) for msg in session["messages"]]
             }
         with open(CONVERSATIONS_PATH, "w") as f:
@@ -180,6 +188,8 @@ def load_data():
                     sessions[session_id] = {
                         "title": s_data.get("title", "Saved Conversation"),
                         "timestamp": s_data.get("timestamp", datetime.now().isoformat()),
+                        "model": s_data.get("model", config.get("model")),
+                        "fallback_mode": s_data.get("fallback_mode", False),
                         "messages": [dict_to_content(msg) for msg in s_data["messages"]],
                         "pending_command": None,
                         "pending_call_id": None,
@@ -211,6 +221,16 @@ def load_data():
             "key": legacy_kimi
         })
         config["active_kimi_key_id"] = "legacy_kimi"
+
+    legacy_or = config.get("openrouter_api_key")
+    if legacy_or and not any(k["provider"] == "openrouter" for k in config["api_keys"]):
+        config["api_keys"].append({
+            "id": "legacy_openrouter",
+            "name": "Imported OpenRouter Key",
+            "provider": "openrouter",
+            "key": legacy_or
+        })
+        config["active_openrouter_key_id"] = "legacy_openrouter"
 
 def get_key_by_id(key_id: str) -> Optional[str]:
     for k in config.get("api_keys", []):
@@ -267,13 +287,23 @@ def create_tray_icon_image():
 def get_status():
     model_name = config.get("model", "gemini-3.1-flash-lite")
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
+    is_openrouter = "/" in model_name
     
-    active_id = config.get("active_kimi_key_id" if is_kimi else "active_gemini_key_id")
+    if is_openrouter:
+        active_id = config.get("active_openrouter_key_id")
+        provider = "openrouter"
+    elif is_kimi:
+        active_id = config.get("active_kimi_key_id")
+        provider = "kimi"
+    else:
+        active_id = config.get("active_gemini_key_id")
+        provider = "gemini"
+        
     has_key = bool(get_key_by_id(active_id))
     
     if not has_key:
         keys_list = config.get("api_keys", [])
-        has_key = any(k["provider"] == ("kimi" if is_kimi else "gemini") for k in keys_list)
+        has_key = any(k["provider"] == provider for k in keys_list)
         
     return {
         "api_key_configured": has_key,
@@ -300,6 +330,7 @@ def get_settings():
         "api_keys": masked_keys,
         "active_gemini_key_id": config.get("active_gemini_key_id", ""),
         "active_kimi_key_id": config.get("active_kimi_key_id", ""),
+        "active_openrouter_key_id": config.get("active_openrouter_key_id", ""),
         "model": config.get("model", "gemini-3.1-flash-lite"),
         "guardrail": config.get("guardrail", "MAX")
     }
@@ -308,6 +339,7 @@ def get_settings():
 def post_settings(settings: SettingsUpdate):
     config["active_gemini_key_id"] = settings.active_gemini_key_id
     config["active_kimi_key_id"] = settings.active_kimi_key_id
+    config["active_openrouter_key_id"] = settings.active_openrouter_key_id
     config["model"] = settings.model
     config["guardrail"] = settings.guardrail
     save_config()
@@ -338,6 +370,8 @@ def add_api_key(item: APIKeyAdd):
         config["active_gemini_key_id"] = key_id
     elif item.provider == "kimi" and not config.get("active_kimi_key_id"):
         config["active_kimi_key_id"] = key_id
+    elif item.provider == "openrouter" and not config.get("active_openrouter_key_id"):
+        config["active_openrouter_key_id"] = key_id
         
     save_config()
     return {"status": "success"}
@@ -360,8 +394,26 @@ def delete_api_key(key_id: str):
         left_kimi = [k for k in new_list if k["provider"] == "kimi"]
         config["active_kimi_key_id"] = left_kimi[0]["id"] if left_kimi else ""
         
+    if config.get("active_openrouter_key_id") == key_id:
+        left_or = [k for k in new_list if k["provider"] == "openrouter"]
+        config["active_openrouter_key_id"] = left_or[0]["id"] if left_or else ""
+        
     save_config()
     return {"status": "success"}
+
+@app.put("/api/settings/keys/{key_id}")
+def update_api_key(key_id: str, item: APIKeyAdd):
+    keys_list = config.get("api_keys", [])
+    for k in keys_list:
+        if k["id"] == key_id:
+            k["name"] = item.name.strip()
+            k["provider"] = item.provider.strip()
+            # If the submitted key value does not contain masked asterisks, update it
+            if "*" not in item.key:
+                k["key"] = item.key.strip()
+            save_config()
+            return {"status": "success"}
+    raise HTTPException(status_code=404, detail="API Key not found.")
 
 @app.get("/api/history")
 def get_history():
@@ -391,6 +443,7 @@ def get_conversation_details(session_id: str):
     return {
         "session_id": session_id,
         "title": session.get("title", "Saved Conversation"),
+        "model": session.get("model", config.get("model")),
         "messages": serializable_messages
     }
 
@@ -402,12 +455,42 @@ def delete_conversation(session_id: str):
         return {"status": "success"}
     raise HTTPException(status_code=404, detail="Conversation session not found.")
 
+@app.post("/api/conversations/{session_id}/model")
+def post_conversation_model(session_id: str, payload: dict = Body(...)):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Conversation session not found.")
+    model = payload.get("model")
+    if model:
+        sessions[session_id]["model"] = model
+        save_conversations()
+    return {"status": "success"}
+
 @app.post("/api/prompt")
 def post_prompt(req: PromptRequest):
-    model_name = config.get("model", "gemini-3.1-flash-lite")
-    is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
+    session_id = req.session_id
     
-    if is_kimi:
+    # Determine which model to use
+    if session_id and session_id in sessions:
+        session = sessions[session_id]
+        if req.model:
+            session["model"] = req.model
+        model_name = session.get("model") or config.get("model", "gemini-3.1-flash-lite")
+    else:
+        model_name = req.model or config.get("model", "gemini-3.1-flash-lite")
+        
+    is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
+    is_openrouter = "/" in model_name
+    
+    if is_openrouter:
+        active_id = config.get("active_openrouter_key_id")
+        api_key = get_key_by_id(active_id)
+        if not api_key:
+            or_keys = [k for k in config.get("api_keys", []) if k["provider"] == "openrouter"]
+            if or_keys:
+                api_key = or_keys[0]["key"]
+        if not api_key:
+            raise HTTPException(status_code=400, detail="No active OpenRouter API Key selected. Please add and select one in Settings.")
+    elif is_kimi:
         active_id = config.get("active_kimi_key_id")
         api_key = get_key_by_id(active_id)
         if not api_key:
@@ -426,8 +509,6 @@ def post_prompt(req: PromptRequest):
         if not api_key:
             raise HTTPException(status_code=400, detail="No active Gemini API Key selected. Please add and select one in Settings.")
             
-    session_id = req.session_id
-    
     if session_id and session_id in sessions:
         # Resume existing session
         session = sessions[session_id]
@@ -448,6 +529,7 @@ def post_prompt(req: PromptRequest):
         ]
         sessions[session_id] = {
             "messages": messages,
+            "model": model_name,
             "pending_command": None,
             "pending_call_id": None,
             "pending_call_name": None
@@ -455,7 +537,7 @@ def post_prompt(req: PromptRequest):
         
     save_conversations()
     
-    if is_kimi:
+    if is_kimi or is_openrouter:
         return process_kimi_turn(session_id)
     else:
         return process_gemini_turn(session_id)
@@ -524,20 +606,31 @@ def post_confirm(req: ConfirmRequest):
     
     model_name = config.get("model", "gemini-3.1-flash-lite")
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
-    if is_kimi:
+    is_openrouter = "/" in model_name
+    if is_kimi or is_openrouter:
         return process_kimi_turn(session_id)
     else:
         return process_gemini_turn(session_id)
 
-def send_kimi_request(api_key: str, model: str, messages: list) -> dict:
+def send_kimi_request(api_key: str, model: str, messages: list, disable_tools: bool = False) -> dict:
     import urllib.request
     import urllib.error
     
-    url = "https://api.moonshot.ai/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
+    is_openrouter = "/" in model
+    if is_openrouter:
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "http://127.0.0.1:18888",
+            "X-Title": "Win11 AI Agent"
+        }
+    else:
+        url = "https://api.moonshot.ai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
     
     openai_tools = [
         {
@@ -565,9 +658,10 @@ def send_kimi_request(api_key: str, model: str, messages: list) -> dict:
     
     payload = {
         "model": model,
-        "messages": messages,
-        "tools": openai_tools
+        "messages": messages
     }
+    if not disable_tools:
+        payload["tools"] = openai_tools
     
     req = urllib.request.Request(
         url,
@@ -587,11 +681,13 @@ def send_kimi_request(api_key: str, model: str, messages: list) -> dict:
             err_msg = err_json.get("error", {}).get("message", err_content)
         except Exception:
             err_msg = err_content or str(e)
-        raise Exception(f"Kimi API Error (HTTP {e.code}): {err_msg}")
+        provider_name = "OpenRouter" if is_openrouter else "Kimi"
+        raise Exception(f"{provider_name} API Error (HTTP {e.code}): {err_msg}")
     except Exception as e:
-        raise Exception(f"Kimi Connection Error: {str(e)}")
+        provider_name = "OpenRouter" if is_openrouter else "Kimi"
+        raise Exception(f"{provider_name} Connection Error: {str(e)}")
 
-def convert_to_openai_messages(messages: List[types.Content]) -> List[dict]:
+def convert_to_openai_messages(messages: List[types.Content], fallback_mode: bool = False) -> List[dict]:
     openai_msgs = []
     pending_ids = []
     
@@ -610,16 +706,23 @@ def convert_to_openai_messages(messages: List[types.Content]) -> List[dict]:
             if part.text:
                 parts_text.append(part.text)
             elif part.function_call:
-                call_id = getattr(part.function_call, "id", None) or f"call_{uuid.uuid4().hex[:12]}"
-                pending_ids.append(call_id)
-                tool_calls.append({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": part.function_call.name,
-                        "arguments": json.dumps(part.function_call.args) if part.function_call.args else "{}"
-                    }
-                })
+                if fallback_mode:
+                    cmd = part.function_call.args.get("command", "")
+                    reason = part.function_call.args.get("reason", "")
+                    parts_text.append(
+                        f"===EXECUTE_COMMAND===\ncommand: {cmd}\nreason: {reason}\n====================="
+                    )
+                else:
+                    call_id = getattr(part.function_call, "id", None) or f"call_{uuid.uuid4().hex[:12]}"
+                    pending_ids.append(call_id)
+                    tool_calls.append({
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": part.function_call.name,
+                            "arguments": json.dumps(part.function_call.args) if part.function_call.args else "{}"
+                        }
+                    })
             elif part.function_response:
                 is_tool_response = True
                 tool_name = part.function_response.name
@@ -630,19 +733,25 @@ def convert_to_openai_messages(messages: List[types.Content]) -> List[dict]:
                     tool_response_val = json.dumps(resp_obj) if resp_obj else ""
         
         if is_tool_response:
-            call_id = pending_ids.pop(0) if pending_ids else f"call_{uuid.uuid4().hex[:12]}"
-            openai_msgs.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "name": tool_name,
-                "content": tool_response_val
-            })
+            if fallback_mode:
+                openai_msgs.append({
+                    "role": "user",
+                    "content": f"===COMMAND_RESULT===\n{tool_response_val}\n===================="
+                })
+            else:
+                call_id = pending_ids.pop(0) if pending_ids else f"call_{uuid.uuid4().hex[:12]}"
+                openai_msgs.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": tool_name,
+                    "content": tool_response_val
+                })
         else:
             openai_msg = {
                 "role": role,
                 "content": "\n".join(parts_text)
             }
-            if tool_calls:
+            if tool_calls and not fallback_mode:
                 openai_msg["tool_calls"] = tool_calls
             openai_msgs.append(openai_msg)
             
@@ -652,20 +761,32 @@ def process_kimi_turn(session_id: str):
     session = sessions[session_id]
     messages = session["messages"]
     
-    active_id = config.get("active_kimi_key_id")
-    api_key = get_key_by_id(active_id)
-    if not api_key:
-        kimi_keys = [k for k in config.get("api_keys", []) if k["provider"] == "kimi"]
-        if kimi_keys:
-            api_key = kimi_keys[0]["key"]
+    model_name = session.get("model") or config.get("model", "moonshot-v1-8k")
+    is_openrouter = "/" in model_name
+    
+    if is_openrouter:
+        active_id = config.get("active_openrouter_key_id")
+        api_key = get_key_by_id(active_id)
+        if not api_key:
+            or_keys = [k for k in config.get("api_keys", []) if k["provider"] == "openrouter"]
+            if or_keys:
+                api_key = or_keys[0]["key"]
+    else:
+        active_id = config.get("active_kimi_key_id")
+        api_key = get_key_by_id(active_id)
+        if not api_key:
+            kimi_keys = [k for k in config.get("api_keys", []) if k["provider"] == "kimi"]
+            if kimi_keys:
+                api_key = kimi_keys[0]["key"]
+                
     if not api_key:
         api_key = config.get("api_key")
         
-    model_name = config.get("model", "moonshot-v1-8k")
     guardrail_level = config.get("guardrail", "MAX")
+    fallback_mode = session.get("fallback_mode", False)
     
     try:
-        openai_messages = convert_to_openai_messages(messages)
+        openai_messages = convert_to_openai_messages(messages, fallback_mode=fallback_mode)
     except Exception as e:
         print(f"Error converting messages: {e}")
         raise HTTPException(status_code=500, detail=f"Message conversion error: {str(e)}")
@@ -679,17 +800,37 @@ def process_kimi_turn(session_id: str):
         "infinite loop trying the exact same command. Speak concisely."
     )
     
+    if fallback_mode:
+        fallback_system_instruction = (
+            "You are running in fallback mode because this model does not support native tool use. "
+            "If you need to execute a command, write it in your response exactly like this:\n"
+            "===EXECUTE_COMMAND===\n"
+            "command: <your command here>\n"
+            "reason: <your reason here>\n"
+            "=====================\n"
+            "Do not use markdown backticks around the command or output format."
+        )
+        system_instruction += "\n" + fallback_system_instruction
+        
     formatted_messages = [
         {"role": "system", "content": system_instruction}
     ] + openai_messages
     
     try:
-        response_json = send_kimi_request(api_key, model_name, formatted_messages)
+        response_json = send_kimi_request(api_key, model_name, formatted_messages, disable_tools=fallback_mode)
     except Exception as e:
-        if len(messages) > 0 and messages[-1].role == "user":
-            messages.pop()
-        print(f"Kimi API Request Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        if not fallback_mode and ("No endpoints found that support tool use" in err_str or "disable_tools" in err_str or "404" in err_str):
+            print("Model does not support native tools. Activating text-based fallback mode...")
+            session["fallback_mode"] = True
+            save_conversations()
+            return process_kimi_turn(session_id)
+        else:
+            if len(messages) > 0 and messages[-1].role == "user":
+                messages.pop()
+            provider_name = "OpenRouter" if is_openrouter else "Kimi"
+            print(f"{provider_name} API Request Error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
         
     try:
         if "choices" not in response_json or not response_json["choices"]:
@@ -700,38 +841,61 @@ def process_kimi_turn(session_id: str):
         content = msg.get("content") or ""
         tool_calls = msg.get("tool_calls")
         
+        import re
         parts = []
         if content:
             parts.append(types.Part.from_text(text=content))
             
-        if tool_calls:
-            call = tool_calls[0]
-            func = call.get("function", {})
-            func_name = func.get("name")
-            func_args_str = func.get("arguments", "{}")
-            try:
-                func_args = json.loads(func_args_str)
-            except Exception:
-                func_args = {}
+        # Parse fallback command if tools are disabled/fallback is enabled
+        cmd_match = re.search(
+            r"===EXECUTE_COMMAND===\s*\n\s*command:\s*(.*?)\n\s*reason:\s*(.*?)(?:\n\s*=====================|\n\s*|$)",
+            content,
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        if not tool_calls and cmd_match:
+            command_val = cmd_match.group(1).strip()
+            reason_val = cmd_match.group(2).strip()
+            
+            # Clean up the Matched execution text block from the content
+            clean_content = content.replace(cmd_match.group(0), "").strip()
+            parts = []
+            if clean_content:
+                parts.append(types.Part.from_text(text=clean_content))
+            else:
+                parts.append(types.Part.from_text(text="Executing command..."))
                 
-            session["pending_command"] = func_args.get("command")
-            session["pending_call_id"] = call.get("id")
-            session["pending_call_name"] = func_name
+            dummy_call_id = f"call_fallback_{uuid.uuid4().hex[:8]}"
+            session["pending_command"] = command_val
+            session["pending_call_id"] = dummy_call_id
+            session["pending_call_name"] = "execute_terminal_command"
             
             parts.append(types.Part(
                 function_call=types.FunctionCall(
-                    name=func_name,
-                    args=func_args
+                    name="execute_terminal_command",
+                    args={"command": command_val, "reason": reason_val}
                 )
             ))
             
-        response_content = types.Content(role="model", parts=parts)
-        session["messages"].append(response_content)
-        save_conversations()
-        
+            # Mock tool_calls
+            tool_calls = [{"id": dummy_call_id, "function": {"name": "execute_terminal_command"}}]
+            content = clean_content if clean_content else "Executing command..."
+            
         if tool_calls:
+            # We fetch call args
+            if hasattr(parts[-1], 'function_call') and parts[-1].function_call:
+                call_args = parts[-1].function_call.args
+                func_name = parts[-1].function_call.name
+            else:
+                call_args = {"command": session["pending_command"], "reason": "System command execution"}
+                func_name = "execute_terminal_command"
+                
+            response_content = types.Content(role="model", parts=parts)
+            session["messages"].append(response_content)
+            save_conversations()
+            
             command = session["pending_command"]
-            reason = func_args.get("reason", "")
+            reason = call_args.get("reason", "")
             risk = utils.classify_command(command)
             
             if utils.should_confirm(command, guardrail_level):
@@ -753,6 +917,9 @@ def process_kimi_turn(session_id: str):
                     "thought": content
                 }
         else:
+            response_content = types.Content(role="model", parts=parts)
+            session["messages"].append(response_content)
+            save_conversations()
             return {
                 "status": "completed",
                 "response": content,
@@ -762,8 +929,8 @@ def process_kimi_turn(session_id: str):
     except Exception as e:
         if len(messages) > 0 and messages[-1].role == "user":
             messages.pop()
-        print(f"Kimi Parsing Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Error parsing Kimi response: {str(e)}")
+        print(f"Parsing Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error parsing model response: {str(e)}")
 
 def process_gemini_turn(session_id: str):
     session = sessions[session_id]

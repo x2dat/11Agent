@@ -59,10 +59,18 @@
                         <h2>AI System Assistant</h2>
                         <p class="panel-desc">Ask your agent to perform local system-level tasks. All operations are sandboxed by your guardrail choice.</p>
                     </div>
-                    <button class="fluent-btn btn-secondary" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 0.85rem;" onclick="startNewChat()">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        New Chat
-                    </button>
+                    <div style="display: flex; gap: 12px; align-items: center;">
+                        <div class="form-group" style="margin-bottom: 0; flex-direction: row; align-items: center; gap: 8px;">
+                            <label for="chat-model-select" style="white-space: nowrap; font-size: 0.85rem; color: var(--text-secondary);">Model:</label>
+                            <select id="chat-model-select" style="padding: 6px 12px; font-size: 0.85rem;" onchange="changeChatModel()">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <button class="fluent-btn btn-secondary" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 0.85rem;" onclick="startNewChat()">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            New Chat
+                        </button>
+                    </div>
                 </header>
                 
                 <div class="chat-container">
@@ -143,14 +151,15 @@
                                     <select id="new-key-provider">
                                         <option value="gemini">Gemini (Google)</option>
                                         <option value="kimi">Kimi (Moonshot AI)</option>
+                                        <option value="openrouter">OpenRouter</option>
                                     </select>
                                 </div>
                                 <div class="form-group" style="flex: 2; margin-bottom: 0;">
                                     <label for="new-key-value">API Key</label>
-                                    <input type="password" id="new-key-value" placeholder="starts with AIzaSy or sk-">
+                                    <input type="password" id="new-key-value" placeholder="starts with AIzaSy, sk-, or sk-or-">
                                 </div>
                             </div>
-                            <button class="fluent-btn btn-secondary" onclick="addNewApiKey()" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px;">
+                            <button id="add-key-submit-btn" class="fluent-btn btn-secondary" onclick="addNewApiKey()" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px;">
                                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                                 Add API Key
                             </button>
@@ -172,6 +181,12 @@
                             </select>
                         </div>
                         <div class="form-group">
+                            <label for="settings-active-openrouter-key">Active OpenRouter Key</label>
+                            <select id="settings-active-openrouter-key">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for="settings-model">Model Name</label>
                             <select id="settings-model">
                                 <optgroup label="Gemini (Google)">
@@ -187,6 +202,12 @@
                                     <option value="moonshot-v1-32k">Kimi v1 32K (Long Context)</option>
                                     <option value="moonshot-v1-128k">Kimi v1 128K (Very Long Context)</option>
                                     <option value="kimi-k2.5">Kimi K2.5 (Coding-capable Flagship)</option>
+                                </optgroup>
+                                <optgroup label="OpenRouter (Free)">
+                                    <option value="meta-llama/llama-3-8b-instruct:free">Llama 3 8B Instruct (Free)</option>
+                                    <option value="google/gemma-2-9b-it:free">Gemma 2 9B IT (Free)</option>
+                                    <option value="mistralai/mistral-7b-instruct:free">Mistral 7B Instruct (Free)</option>
+                                    <option value="openchat/openchat-7b:free">OpenChat 7B (Free)</option>
                                 </optgroup>
                             </select>
                         </div>
@@ -255,6 +276,29 @@
 
     <!-- Inline Toast Notification -->
     <div id="toast" class="fluent-toast">Settings saved successfully!</div>
+
+    <!-- Custom Confirmation Dialog Modal -->
+    <div class="modal-backdrop" id="confirm-modal">
+        <div class="fluent-dialog" style="max-width: 420px; gap: 14px;">
+            <div class="dialog-header">
+                <div class="warning-icon-wrapper" id="confirm-modal-icon-container" style="color: var(--accent-color); background-color: rgba(96, 205, 255, 0.1);">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="dialog-title" id="confirm-modal-title">Confirm Action</h3>
+                </div>
+            </div>
+            <div class="dialog-body">
+                <p id="confirm-modal-message" style="line-height: 1.5; font-size: 0.95rem;">Are you sure you want to proceed?</p>
+            </div>
+            <div class="dialog-footer">
+                <button class="fluent-btn btn-secondary" id="confirm-modal-cancel-btn">Cancel</button>
+                <button class="fluent-btn btn-primary" id="confirm-modal-confirm-btn">Confirm</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>
