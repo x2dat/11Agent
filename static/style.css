@@ -865,3 +865,69 @@ textarea#chat-input {
 .markdown-table-container tr:hover {
     background: rgba(255, 255, 255, 0.01);
 }
+
+/* Key manager styles */
+.keys-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.key-item-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 10px 14px;
+    transition: all 0.15s ease;
+}
+
+.key-item-card:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.key-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.key-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.key-name-text {
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+.key-provider-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.key-provider-badge.gemini {
+    background-color: rgba(96, 205, 255, 0.15);
+    color: #60cdff;
+}
+
+.key-provider-badge.kimi {
+    background-color: rgba(255, 185, 0, 0.15);
+    color: #ffb900;
+}
+
+.key-masked-val {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}

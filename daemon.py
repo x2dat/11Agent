@@ -60,11 +60,15 @@ active_window = None
 
 # Models
 class SettingsUpdate(BaseModel):
-    api_key: Optional[str] = ""
-    gemini_api_key: Optional[str] = ""
-    kimi_api_key: Optional[str] = ""
+    active_gemini_key_id: Optional[str] = ""
+    active_kimi_key_id: Optional[str] = ""
     model: str
     guardrail: str
+
+class APIKeyAdd(BaseModel):
+    name: str
+    provider: str
+    key: str
 
 class PromptRequest(BaseModel):
     prompt: str
@@ -156,7 +160,8 @@ def load_data():
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r") as f:
-                config.update(json.load(f))
+                saved_config = json.load(f)
+                config.update(saved_config)
         except Exception as e:
             print(f"Error loading config: {e}")
             
@@ -182,6 +187,36 @@ def load_data():
                     }
         except Exception as e:
             print(f"Error loading conversations: {e}")
+            
+    # Migrate legacy API key settings
+    if "api_keys" not in config:
+        config["api_keys"] = []
+        
+    legacy_gemini = config.get("gemini_api_key") or config.get("api_key")
+    if legacy_gemini and not any(k["provider"] == "gemini" for k in config["api_keys"]):
+        config["api_keys"].append({
+            "id": "legacy_gemini",
+            "name": "Imported Gemini Key",
+            "provider": "gemini",
+            "key": legacy_gemini
+        })
+        config["active_gemini_key_id"] = "legacy_gemini"
+        
+    legacy_kimi = config.get("kimi_api_key")
+    if legacy_kimi and not any(k["provider"] == "kimi" for k in config["api_keys"]):
+        config["api_keys"].append({
+            "id": "legacy_kimi",
+            "name": "Imported Kimi Key",
+            "provider": "kimi",
+            "key": legacy_kimi
+        })
+        config["active_kimi_key_id"] = "legacy_kimi"
+
+def get_key_by_id(key_id: str) -> Optional[str]:
+    for k in config.get("api_keys", []):
+        if k["id"] == key_id:
+            return k["key"]
+    return None
 
 def save_config():
     try:
@@ -206,7 +241,6 @@ def add_to_history(command: str, risk: str, status: str, details: str):
         "details": details
     }
     history_log.insert(0, item)
-    # Keep only last 100 history items
     if len(history_log) > 100:
         history_log.pop()
     save_history()
@@ -233,7 +267,14 @@ def create_tray_icon_image():
 def get_status():
     model_name = config.get("model", "gemini-3.1-flash-lite")
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
-    has_key = bool(config.get("kimi_api_key" if is_kimi else "gemini_api_key") or config.get("api_key"))
+    
+    active_id = config.get("active_kimi_key_id" if is_kimi else "active_gemini_key_id")
+    has_key = bool(get_key_by_id(active_id))
+    
+    if not has_key:
+        keys_list = config.get("api_keys", [])
+        has_key = any(k["provider"] == ("kimi" if is_kimi else "gemini") for k in keys_list)
+        
     return {
         "api_key_configured": has_key,
         "guardrail": config.get("guardrail"),
@@ -246,35 +287,79 @@ def get_settings():
         if not k: return ""
         return k[:6] + "*" * (len(k) - 10) + k[-4:] if len(k) > 10 else "******"
         
+    masked_keys = []
+    for k in config.get("api_keys", []):
+        masked_keys.append({
+            "id": k["id"],
+            "name": k["name"],
+            "provider": k["provider"],
+            "key": mask_key(k["key"])
+        })
+        
     return {
-        "api_key": mask_key(config.get("api_key")),
-        "gemini_api_key": mask_key(config.get("gemini_api_key") or config.get("api_key")),
-        "kimi_api_key": mask_key(config.get("kimi_api_key")),
-        "model": config.get("model"),
-        "guardrail": config.get("guardrail")
+        "api_keys": masked_keys,
+        "active_gemini_key_id": config.get("active_gemini_key_id", ""),
+        "active_kimi_key_id": config.get("active_kimi_key_id", ""),
+        "model": config.get("model", "gemini-3.1-flash-lite"),
+        "guardrail": config.get("guardrail", "MAX")
     }
 
 @app.post("/api/settings")
 def post_settings(settings: SettingsUpdate):
-    # Update Gemini key
-    new_gemini = settings.gemini_api_key.strip() if settings.gemini_api_key else ""
-    if new_gemini:
-        if "*" not in new_gemini:
-            config["gemini_api_key"] = new_gemini
-            config["api_key"] = new_gemini
-    else:
-        new_legacy = settings.api_key.strip() if settings.api_key else ""
-        if new_legacy and "*" not in new_legacy:
-            config["gemini_api_key"] = new_legacy
-            config["api_key"] = new_legacy
-            
-    # Update Kimi key
-    new_kimi = settings.kimi_api_key.strip() if settings.kimi_api_key else ""
-    if new_kimi and "*" not in new_kimi:
-        config["kimi_api_key"] = new_kimi
-        
+    config["active_gemini_key_id"] = settings.active_gemini_key_id
+    config["active_kimi_key_id"] = settings.active_kimi_key_id
     config["model"] = settings.model
     config["guardrail"] = settings.guardrail
+    save_config()
+    return {"status": "success"}
+
+@app.post("/api/settings/keys")
+def add_api_key(item: APIKeyAdd):
+    key_val = item.key.strip()
+    if not key_val:
+        raise HTTPException(status_code=400, detail="API Key value cannot be empty.")
+        
+    keys_list = config.get("api_keys", [])
+    if any(k["name"].lower() == item.name.lower() for k in keys_list):
+        raise HTTPException(status_code=400, detail="An API Key with this name already exists.")
+        
+    key_id = f"key_{uuid.uuid4().hex[:8]}"
+    new_key = {
+        "id": key_id,
+        "name": item.name.strip(),
+        "provider": item.provider.strip(),
+        "key": key_val
+    }
+    
+    keys_list.append(new_key)
+    config["api_keys"] = keys_list
+    
+    if item.provider == "gemini" and not config.get("active_gemini_key_id"):
+        config["active_gemini_key_id"] = key_id
+    elif item.provider == "kimi" and not config.get("active_kimi_key_id"):
+        config["active_kimi_key_id"] = key_id
+        
+    save_config()
+    return {"status": "success"}
+
+@app.delete("/api/settings/keys/{key_id}")
+def delete_api_key(key_id: str):
+    keys_list = config.get("api_keys", [])
+    new_list = [k for k in keys_list if k["id"] != key_id]
+    
+    if len(new_list) == len(keys_list):
+        raise HTTPException(status_code=404, detail="API Key not found.")
+        
+    config["api_keys"] = new_list
+    
+    if config.get("active_gemini_key_id") == key_id:
+        left_gemini = [k for k in new_list if k["provider"] == "gemini"]
+        config["active_gemini_key_id"] = left_gemini[0]["id"] if left_gemini else ""
+        
+    if config.get("active_kimi_key_id") == key_id:
+        left_kimi = [k for k in new_list if k["provider"] == "kimi"]
+        config["active_kimi_key_id"] = left_kimi[0]["id"] if left_kimi else ""
+        
     save_config()
     return {"status": "success"}
 
@@ -323,13 +408,23 @@ def post_prompt(req: PromptRequest):
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
     
     if is_kimi:
-        api_key = config.get("kimi_api_key") or config.get("api_key")
+        active_id = config.get("active_kimi_key_id")
+        api_key = get_key_by_id(active_id)
         if not api_key:
-            raise HTTPException(status_code=400, detail="Kimi API Key is not configured. Please add one in Settings.")
+            kimi_keys = [k for k in config.get("api_keys", []) if k["provider"] == "kimi"]
+            if kimi_keys:
+                api_key = kimi_keys[0]["key"]
+        if not api_key:
+            raise HTTPException(status_code=400, detail="No active Kimi API Key selected. Please add and select one in Settings.")
     else:
-        api_key = config.get("gemini_api_key") or config.get("api_key")
+        active_id = config.get("active_gemini_key_id")
+        api_key = get_key_by_id(active_id)
         if not api_key:
-            raise HTTPException(status_code=400, detail="Gemini API Key is not configured. Please add one in Settings.")
+            gemini_keys = [k for k in config.get("api_keys", []) if k["provider"] == "gemini"]
+            if gemini_keys:
+                api_key = gemini_keys[0]["key"]
+        if not api_key:
+            raise HTTPException(status_code=400, detail="No active Gemini API Key selected. Please add and select one in Settings.")
             
     session_id = req.session_id
     
@@ -556,7 +651,16 @@ def convert_to_openai_messages(messages: List[types.Content]) -> List[dict]:
 def process_kimi_turn(session_id: str):
     session = sessions[session_id]
     messages = session["messages"]
-    api_key = config.get("kimi_api_key") or config.get("api_key")
+    
+    active_id = config.get("active_kimi_key_id")
+    api_key = get_key_by_id(active_id)
+    if not api_key:
+        kimi_keys = [k for k in config.get("api_keys", []) if k["provider"] == "kimi"]
+        if kimi_keys:
+            api_key = kimi_keys[0]["key"]
+    if not api_key:
+        api_key = config.get("api_key")
+        
     model_name = config.get("model", "moonshot-v1-8k")
     guardrail_level = config.get("guardrail", "MAX")
     
@@ -664,7 +768,16 @@ def process_kimi_turn(session_id: str):
 def process_gemini_turn(session_id: str):
     session = sessions[session_id]
     messages = session["messages"]
-    api_key = config.get("api_key")
+    
+    active_id = config.get("active_gemini_key_id")
+    api_key = get_key_by_id(active_id)
+    if not api_key:
+        gemini_keys = [k for k in config.get("api_keys", []) if k["provider"] == "gemini"]
+        if gemini_keys:
+            api_key = gemini_keys[0]["key"]
+    if not api_key:
+        api_key = config.get("api_key")
+        
     model_name = config.get("model", "gemini-3.1-flash-lite")
     guardrail_level = config.get("guardrail", "MAX")
     

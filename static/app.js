@@ -102,9 +102,10 @@ async function loadSettings() {
         const res = await fetch(`${API_BASE}/api/settings`);
         if (res.ok) {
             const settings = await res.json();
-            const geminiKey = settings.gemini_api_key || settings.api_key || "";
-            document.getElementById("settings-gemini-key").value = geminiKey;
-            document.getElementById("settings-kimi-key").value = settings.kimi_api_key || "";
+            
+            // Render key list and select boxes
+            renderKeys(settings.api_keys || [], settings.active_gemini_key_id, settings.active_kimi_key_id);
+            
             if (settings.model) {
                 document.getElementById("settings-model").value = settings.model;
             }
@@ -117,10 +118,114 @@ async function loadSettings() {
     }
 }
 
+function renderKeys(apiKeys, activeGeminiId, activeKimiId) {
+    const listEl = document.getElementById("keys-list");
+    listEl.innerHTML = "";
+    
+    if (apiKeys.length === 0) {
+        listEl.innerHTML = `<div style="padding: 10px; font-size: 0.8rem; color: var(--text-muted); text-align: center; border: 1px dashed var(--border-color); border-radius: 6px;">No saved API keys. Please add one below.</div>`;
+    }
+    
+    const geminiSelect = document.getElementById("settings-active-gemini-key");
+    const kimiSelect = document.getElementById("settings-active-kimi-key");
+    
+    geminiSelect.innerHTML = `<option value="">None Selected</option>`;
+    kimiSelect.innerHTML = `<option value="">None Selected</option>`;
+    
+    apiKeys.forEach(key => {
+        // Render in manager list
+        const card = document.createElement("div");
+        card.className = "key-item-card";
+        
+        card.innerHTML = `
+            <div class="key-info">
+                <div class="key-name-row">
+                    <span class="key-name-text">${escapeHtml(key.name)}</span>
+                    <span class="key-provider-badge ${key.provider}">${key.provider}</span>
+                </div>
+                <div class="key-masked-val">${escapeHtml(key.key)}</div>
+            </div>
+            <button class="delete-chat-btn" onclick="deleteApiKey('${key.id}')" style="opacity: 1; padding: 4px;">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            </button>
+        `;
+        listEl.appendChild(card);
+        
+        // Add option to respective select
+        const option = document.createElement("option");
+        option.value = key.id;
+        option.innerText = key.name;
+        
+        if (key.provider === "gemini") {
+            if (key.id === activeGeminiId) option.selected = true;
+            geminiSelect.appendChild(option);
+        } else if (key.provider === "kimi") {
+            if (key.id === activeKimiId) option.selected = true;
+            kimiSelect.appendChild(option);
+        }
+    });
+}
+
+async function addNewApiKey() {
+    const nameEl = document.getElementById("new-key-name");
+    const providerEl = document.getElementById("new-key-provider");
+    const valueEl = document.getElementById("new-key-value");
+    
+    const name = nameEl.value.trim();
+    const provider = providerEl.value;
+    const key = valueEl.value.trim();
+    
+    if (!name || !key) {
+        showToast("Please enter both a key name and the API key value.", "error");
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/api/settings/keys`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, provider, key })
+        });
+        
+        if (res.ok) {
+            showToast("API Key added successfully!", "success");
+            nameEl.value = "";
+            valueEl.value = "";
+            loadSettings();
+            checkDaemonStatus();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || "Failed to add API key.", "error");
+        }
+    } catch (err) {
+        showToast("Error communicating with daemon.", "error");
+    }
+}
+
+async function deleteApiKey(keyId) {
+    if (confirm("Are you sure you want to delete this API key?")) {
+        try {
+            const res = await fetch(`${API_BASE}/api/settings/keys/${keyId}`, {
+                method: "DELETE"
+            });
+            
+            if (res.ok) {
+                showToast("API Key deleted.", "success");
+                loadSettings();
+                checkDaemonStatus();
+            } else {
+                showToast("Failed to delete key.", "error");
+            }
+        } catch (err) {
+            showToast("Error communicating with daemon.", "error");
+        }
+    }
+}
+
 // Save Settings to Backend
 async function saveSettings() {
-    const gemini_api_key = document.getElementById("settings-gemini-key").value.trim();
-    const kimi_api_key = document.getElementById("settings-kimi-key").value.trim();
+    const active_gemini_key_id = document.getElementById("settings-active-gemini-key").value;
+    const active_kimi_key_id = document.getElementById("settings-active-kimi-key").value;
     const model = document.getElementById("settings-model").value;
     const guardrail = document.getElementById("settings-guardrail").value;
     
@@ -128,7 +233,7 @@ async function saveSettings() {
         const res = await fetch(`${API_BASE}/api/settings`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ gemini_api_key, kimi_api_key, model, guardrail })
+            body: JSON.stringify({ active_gemini_key_id, active_kimi_key_id, model, guardrail })
         });
         
         if (res.ok) {

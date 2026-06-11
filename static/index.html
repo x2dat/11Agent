@@ -125,16 +125,51 @@
                 </header>
                 <div class="settings-content">
                     <div class="settings-card">
-                        <h3>AI Cloud Brain Settings</h3>
+                        <h3>API Key Manager</h3>
+                        <p class="field-hint" style="margin-bottom: 12px;">Manage multiple API keys for different providers.</p>
+                        <div class="keys-list" id="keys-list">
+                            <!-- Populated dynamically -->
+                        </div>
+                        
+                        <div style="border-top: 1px solid var(--border-color); margin-top: 15px; padding-top: 15px;">
+                            <h4 style="margin-bottom: 10px; font-weight: 500;">Add New API Key</h4>
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label for="new-key-name">Key Name</label>
+                                <input type="text" id="new-key-name" placeholder="e.g. Noah Personal, Team Account">
+                            </div>
+                            <div style="display: flex; gap: 12px; margin-bottom: 10px;">
+                                <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                    <label for="new-key-provider">Provider</label>
+                                    <select id="new-key-provider">
+                                        <option value="gemini">Gemini (Google)</option>
+                                        <option value="kimi">Kimi (Moonshot AI)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex: 2; margin-bottom: 0;">
+                                    <label for="new-key-value">API Key</label>
+                                    <input type="password" id="new-key-value" placeholder="starts with AIzaSy or sk-">
+                                </div>
+                            </div>
+                            <button class="fluent-btn btn-secondary" onclick="addNewApiKey()" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px;">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                Add API Key
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="settings-card">
+                        <h3>Model Preferences</h3>
                         <div class="form-group">
-                            <label for="settings-gemini-key">Gemini API Key</label>
-                            <input type="password" id="settings-gemini-key" placeholder="AIzaSy...">
-                            <span class="field-hint">Used for Gemini models. Get one from Google AI Studio.</span>
+                            <label for="settings-active-gemini-key">Active Gemini Key</label>
+                            <select id="settings-active-gemini-key">
+                                <!-- Populated dynamically -->
+                            </select>
                         </div>
                         <div class="form-group">
-                            <label for="settings-kimi-key">Kimi (Moonshot AI) API Key</label>
-                            <input type="password" id="settings-kimi-key" placeholder="sk-...">
-                            <span class="field-hint">Used for Kimi/Moonshot models (Generous free tier: 20 RPM / 150k RPD).</span>
+                            <label for="settings-active-kimi-key">Active Kimi Key</label>
+                            <select id="settings-active-kimi-key">
+                                <!-- Populated dynamically -->
+                            </select>
                         </div>
                         <div class="form-group">
                             <label for="settings-model">Model Name</label>
