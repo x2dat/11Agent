@@ -533,7 +533,7 @@ def send_kimi_request(api_key: str, model: str, messages: list) -> dict:
     import urllib.request
     import urllib.error
     
-    url = "https://api.moonshot.cn/v1/chat/completions"
+    url = "https://api.moonshot.ai/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
