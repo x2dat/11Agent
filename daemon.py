@@ -49,6 +49,8 @@ app.add_middleware(
 # Global State
 config = {
     "api_key": "",
+    "gemini_api_key": "",
+    "kimi_api_key": "",
     "model": "gemini-3.1-flash-lite",
     "guardrail": "MAX"
 }
@@ -58,7 +60,9 @@ active_window = None
 
 # Models
 class SettingsUpdate(BaseModel):
-    api_key: str
+    api_key: Optional[str] = ""
+    gemini_api_key: Optional[str] = ""
+    kimi_api_key: Optional[str] = ""
     model: str
     guardrail: str
 
@@ -227,35 +231,47 @@ def create_tray_icon_image():
 # API Routes
 @app.get("/api/status")
 def get_status():
+    model_name = config.get("model", "gemini-3.1-flash-lite")
+    is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
+    has_key = bool(config.get("kimi_api_key" if is_kimi else "gemini_api_key") or config.get("api_key"))
     return {
-        "api_key_configured": bool(config.get("api_key")),
+        "api_key_configured": has_key,
         "guardrail": config.get("guardrail"),
-        "model": config.get("model")
+        "model": model_name
     }
 
 @app.get("/api/settings")
 def get_settings():
-    # Return masked API key for security
-    masked_key = ""
-    api_key = config.get("api_key", "")
-    if api_key:
-        masked_key = api_key[:6] + "*" * (len(api_key) - 10) + api_key[-4:] if len(api_key) > 10 else "******"
+    def mask_key(k):
+        if not k: return ""
+        return k[:6] + "*" * (len(k) - 10) + k[-4:] if len(k) > 10 else "******"
         
     return {
-        "api_key": masked_key,
+        "api_key": mask_key(config.get("api_key")),
+        "gemini_api_key": mask_key(config.get("gemini_api_key") or config.get("api_key")),
+        "kimi_api_key": mask_key(config.get("kimi_api_key")),
         "model": config.get("model"),
         "guardrail": config.get("guardrail")
     }
 
 @app.post("/api/settings")
-def update_settings(settings: SettingsUpdate):
-    # If API key is masked, don't overwrite with masked string
-    new_key = settings.api_key.strip()
-    if new_key and not new_key.startswith("AIzaSy") and "*" in new_key:
-        # Keep old key
-        pass
+def post_settings(settings: SettingsUpdate):
+    # Update Gemini key
+    new_gemini = settings.gemini_api_key.strip() if settings.gemini_api_key else ""
+    if new_gemini:
+        if "*" not in new_gemini:
+            config["gemini_api_key"] = new_gemini
+            config["api_key"] = new_gemini
     else:
-        config["api_key"] = new_key
+        new_legacy = settings.api_key.strip() if settings.api_key else ""
+        if new_legacy and "*" not in new_legacy:
+            config["gemini_api_key"] = new_legacy
+            config["api_key"] = new_legacy
+            
+    # Update Kimi key
+    new_kimi = settings.kimi_api_key.strip() if settings.kimi_api_key else ""
+    if new_kimi and "*" not in new_kimi:
+        config["kimi_api_key"] = new_kimi
         
     config["model"] = settings.model
     config["guardrail"] = settings.guardrail
@@ -303,10 +319,18 @@ def delete_conversation(session_id: str):
 
 @app.post("/api/prompt")
 def post_prompt(req: PromptRequest):
-    api_key = config.get("api_key")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Gemini API Key is not configured. Please add one in Settings.")
-        
+    model_name = config.get("model", "gemini-3.1-flash-lite")
+    is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
+    
+    if is_kimi:
+        api_key = config.get("kimi_api_key") or config.get("api_key")
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Kimi API Key is not configured. Please add one in Settings.")
+    else:
+        api_key = config.get("gemini_api_key") or config.get("api_key")
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Gemini API Key is not configured. Please add one in Settings.")
+            
     session_id = req.session_id
     
     if session_id and session_id in sessions:
@@ -335,7 +359,11 @@ def post_prompt(req: PromptRequest):
         }
         
     save_conversations()
-    return process_gemini_turn(session_id)
+    
+    if is_kimi:
+        return process_kimi_turn(session_id)
+    else:
+        return process_gemini_turn(session_id)
 
 @app.post("/api/confirm")
 def post_confirm(req: ConfirmRequest):
@@ -398,7 +426,240 @@ def post_confirm(req: ConfirmRequest):
     )
     
     save_conversations()
-    return process_gemini_turn(session_id)
+    
+    model_name = config.get("model", "gemini-3.1-flash-lite")
+    is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
+    if is_kimi:
+        return process_kimi_turn(session_id)
+    else:
+        return process_gemini_turn(session_id)
+
+def send_kimi_request(api_key: str, model: str, messages: list) -> dict:
+    import urllib.request
+    import urllib.error
+    
+    url = "https://api.moonshot.cn/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    openai_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_terminal_command",
+                "description": "Executes a PowerShell terminal command on the local Windows machine.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to execute in PowerShell."
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "A brief explanation of why this command is being run."
+                        }
+                    },
+                    "required": ["command", "reason"]
+                }
+            }
+        }
+    ]
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "tools": openai_tools
+    }
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_data = response.read().decode("utf-8")
+            return json.loads(res_data)
+    except urllib.error.HTTPError as e:
+        err_content = e.read().decode("utf-8")
+        try:
+            err_json = json.loads(err_content)
+            err_msg = err_json.get("error", {}).get("message", err_content)
+        except Exception:
+            err_msg = err_content or str(e)
+        raise Exception(f"Kimi API Error (HTTP {e.code}): {err_msg}")
+    except Exception as e:
+        raise Exception(f"Kimi Connection Error: {str(e)}")
+
+def convert_to_openai_messages(messages: List[types.Content]) -> List[dict]:
+    openai_msgs = []
+    pending_ids = []
+    
+    for msg in messages:
+        role = msg.role
+        if role == "model":
+            role = "assistant"
+        
+        parts_text = []
+        tool_calls = []
+        is_tool_response = False
+        tool_response_val = ""
+        tool_name = ""
+        
+        for part in msg.parts:
+            if part.text:
+                parts_text.append(part.text)
+            elif part.function_call:
+                call_id = getattr(part.function_call, "id", None) or f"call_{uuid.uuid4().hex[:12]}"
+                pending_ids.append(call_id)
+                tool_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": part.function_call.name,
+                        "arguments": json.dumps(part.function_call.args) if part.function_call.args else "{}"
+                    }
+                })
+            elif part.function_response:
+                is_tool_response = True
+                tool_name = part.function_response.name
+                resp_obj = part.function_response.response
+                if resp_obj and "result" in resp_obj:
+                    tool_response_val = str(resp_obj["result"])
+                else:
+                    tool_response_val = json.dumps(resp_obj) if resp_obj else ""
+        
+        if is_tool_response:
+            call_id = pending_ids.pop(0) if pending_ids else f"call_{uuid.uuid4().hex[:12]}"
+            openai_msgs.append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": tool_name,
+                "content": tool_response_val
+            })
+        else:
+            openai_msg = {
+                "role": role,
+                "content": "\n".join(parts_text)
+            }
+            if tool_calls:
+                openai_msg["tool_calls"] = tool_calls
+            openai_msgs.append(openai_msg)
+            
+    return openai_msgs
+
+def process_kimi_turn(session_id: str):
+    session = sessions[session_id]
+    messages = session["messages"]
+    api_key = config.get("kimi_api_key") or config.get("api_key")
+    model_name = config.get("model", "moonshot-v1-8k")
+    guardrail_level = config.get("guardrail", "MAX")
+    
+    try:
+        openai_messages = convert_to_openai_messages(messages)
+    except Exception as e:
+        print(f"Error converting messages: {e}")
+        raise HTTPException(status_code=500, detail=f"Message conversion error: {str(e)}")
+        
+    system_instruction = (
+        "You are a system automation agent for Windows 11. You help the user manage their computer by "
+        "executing PowerShell commands. Always explain what you are planning to do and why in a text response "
+        "before invoking the execute_terminal_command tool (this documents your actions for the user). "
+        "If a command fails, do not give up; analyze the error and try a second alternative approach "
+        "(such as using different cmdlets, checking folders, or installing prerequisites). Do not enter an "
+        "infinite loop trying the exact same command. Speak concisely."
+    )
+    
+    formatted_messages = [
+        {"role": "system", "content": system_instruction}
+    ] + openai_messages
+    
+    try:
+        response_json = send_kimi_request(api_key, model_name, formatted_messages)
+    except Exception as e:
+        if len(messages) > 0 and messages[-1].role == "user":
+            messages.pop()
+        print(f"Kimi API Request Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    try:
+        if "choices" not in response_json or not response_json["choices"]:
+            raise Exception("Invalid API response: 'choices' field is missing or empty.")
+            
+        choice = response_json["choices"][0]
+        msg = choice.get("message", {})
+        content = msg.get("content") or ""
+        tool_calls = msg.get("tool_calls")
+        
+        parts = []
+        if content:
+            parts.append(types.Part.from_text(text=content))
+            
+        if tool_calls:
+            call = tool_calls[0]
+            func = call.get("function", {})
+            func_name = func.get("name")
+            func_args_str = func.get("arguments", "{}")
+            try:
+                func_args = json.loads(func_args_str)
+            except Exception:
+                func_args = {}
+                
+            session["pending_command"] = func_args.get("command")
+            session["pending_call_id"] = call.get("id")
+            session["pending_call_name"] = func_name
+            
+            parts.append(types.Part(
+                function_call=types.FunctionCall(
+                    name=func_name,
+                    args=func_args
+                )
+            ))
+            
+        response_content = types.Content(role="model", parts=parts)
+        session["messages"].append(response_content)
+        save_conversations()
+        
+        if tool_calls:
+            command = session["pending_command"]
+            reason = func_args.get("reason", "")
+            risk = utils.classify_command(command)
+            
+            if utils.should_confirm(command, guardrail_level):
+                return {
+                    "status": "requires_confirmation",
+                    "command": command,
+                    "reason": reason,
+                    "risk": risk,
+                    "session_id": session_id,
+                    "thought": content
+                }
+            else:
+                return {
+                    "status": "auto_run",
+                    "command": command,
+                    "reason": reason,
+                    "risk": risk,
+                    "session_id": session_id,
+                    "thought": content
+                }
+        else:
+            return {
+                "status": "completed",
+                "response": content,
+                "session_id": session_id
+            }
+            
+    except Exception as e:
+        if len(messages) > 0 and messages[-1].role == "user":
+            messages.pop()
+        print(f"Kimi Parsing Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error parsing Kimi response: {str(e)}")
 
 def process_gemini_turn(session_id: str):
     session = sessions[session_id]

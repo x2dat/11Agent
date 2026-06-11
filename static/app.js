@@ -102,9 +102,9 @@ async function loadSettings() {
         const res = await fetch(`${API_BASE}/api/settings`);
         if (res.ok) {
             const settings = await res.json();
-            if (settings.api_key) {
-                document.getElementById("settings-api-key").value = settings.api_key;
-            }
+            const geminiKey = settings.gemini_api_key || settings.api_key || "";
+            document.getElementById("settings-gemini-key").value = geminiKey;
+            document.getElementById("settings-kimi-key").value = settings.kimi_api_key || "";
             if (settings.model) {
                 document.getElementById("settings-model").value = settings.model;
             }
@@ -119,7 +119,8 @@ async function loadSettings() {
 
 // Save Settings to Backend
 async function saveSettings() {
-    const api_key = document.getElementById("settings-api-key").value.trim();
+    const gemini_api_key = document.getElementById("settings-gemini-key").value.trim();
+    const kimi_api_key = document.getElementById("settings-kimi-key").value.trim();
     const model = document.getElementById("settings-model").value;
     const guardrail = document.getElementById("settings-guardrail").value;
     
@@ -127,7 +128,7 @@ async function saveSettings() {
         const res = await fetch(`${API_BASE}/api/settings`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key, model, guardrail })
+            body: JSON.stringify({ gemini_api_key, kimi_api_key, model, guardrail })
         });
         
         if (res.ok) {
