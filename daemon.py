@@ -232,6 +232,9 @@ def load_data():
         })
         config["active_openrouter_key_id"] = "legacy_openrouter"
 
+# Load initial data on import
+load_data()
+
 def get_key_by_id(key_id: str) -> Optional[str]:
     for k in config.get("api_keys", []):
         if k["id"] == key_id:
@@ -285,7 +288,7 @@ def create_tray_icon_image():
 # API Routes
 @app.get("/api/status")
 def get_status():
-    model_name = config.get("model", "gemini-3.1-flash-lite")
+    model_name = config.get("model") or "gemini-3.1-flash-lite"
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
     is_openrouter = "/" in model_name
     
@@ -331,7 +334,7 @@ def get_settings():
         "active_gemini_key_id": config.get("active_gemini_key_id", ""),
         "active_kimi_key_id": config.get("active_kimi_key_id", ""),
         "active_openrouter_key_id": config.get("active_openrouter_key_id", ""),
-        "model": config.get("model", "gemini-3.1-flash-lite"),
+        "model": config.get("model") or "gemini-3.1-flash-lite",
         "guardrail": config.get("guardrail", "MAX")
     }
 
@@ -474,9 +477,9 @@ def post_prompt(req: PromptRequest):
         session = sessions[session_id]
         if req.model:
             session["model"] = req.model
-        model_name = session.get("model") or config.get("model", "gemini-3.1-flash-lite")
+        model_name = session.get("model") or config.get("model") or "gemini-3.1-flash-lite"
     else:
-        model_name = req.model or config.get("model", "gemini-3.1-flash-lite")
+        model_name = req.model or config.get("model") or "gemini-3.1-flash-lite"
         
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
     is_openrouter = "/" in model_name
@@ -604,7 +607,8 @@ def post_confirm(req: ConfirmRequest):
     
     save_conversations()
     
-    model_name = config.get("model", "gemini-3.1-flash-lite")
+    session = sessions[session_id]
+    model_name = session.get("model") or config.get("model") or "gemini-3.1-flash-lite"
     is_kimi = model_name.startswith("kimi-") or model_name.startswith("moonshot-")
     is_openrouter = "/" in model_name
     if is_kimi or is_openrouter:
@@ -761,7 +765,7 @@ def process_kimi_turn(session_id: str):
     session = sessions[session_id]
     messages = session["messages"]
     
-    model_name = session.get("model") or config.get("model", "moonshot-v1-8k")
+    model_name = session.get("model") or config.get("model") or "moonshot-v1-8k"
     is_openrouter = "/" in model_name
     
     if is_openrouter:
@@ -852,6 +856,33 @@ def process_kimi_turn(session_id: str):
             content,
             re.IGNORECASE | re.DOTALL
         )
+        
+        if not tool_calls and not cmd_match:
+            # Loose match for models that omit "command:" and "reason:" labels
+            cmd_match_loose = re.search(
+                r"===EXECUTE_COMMAND===\s*\n\s*(.*?)(?:\n\s*reason:\s*(.*?)(?:\n\s*=====================|\n\s*|$)|\n\s*=>\s*(.*?)(?:\n\s*=====================|\n\s*|$)|\n\s*=====================|\n\s*|$)",
+                content,
+                re.IGNORECASE | re.DOTALL
+            )
+            if cmd_match_loose:
+                command_val = cmd_match_loose.group(1).strip()
+                if command_val.lower().startswith("command:"):
+                    command_val = command_val[8:].strip()
+                
+                reason_val = (cmd_match_loose.group(2) or cmd_match_loose.group(3) or "System command execution").strip()
+                
+                if command_val and "===" not in command_val:
+                    class MockMatch:
+                        def __init__(self, full_match, cmd, rsn):
+                            self._full_match = full_match
+                            self._cmd = cmd
+                            self._rsn = rsn
+                        def group(self, idx):
+                            if idx == 0: return self._full_match
+                            if idx == 1: return self._cmd
+                            if idx == 2: return self._rsn
+                    
+                    cmd_match = MockMatch(cmd_match_loose.group(0), command_val, reason_val)
         
         if not tool_calls and cmd_match:
             command_val = cmd_match.group(1).strip()
@@ -945,7 +976,7 @@ def process_gemini_turn(session_id: str):
     if not api_key:
         api_key = config.get("api_key")
         
-    model_name = config.get("model", "gemini-3.1-flash-lite")
+    model_name = session.get("model") or config.get("model") or "gemini-3.1-flash-lite"
     guardrail_level = config.get("guardrail", "MAX")
     
     client = genai.Client(api_key=api_key)

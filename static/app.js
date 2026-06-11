@@ -14,6 +14,13 @@ let chatSessionModel = null;
 
 // Initialize on load
 document.addEventListener("DOMContentLoaded", () => {
+    // Populate chat model select synchronously on load from settings-model options to prevent race conditions
+    const settingsModel = document.getElementById("settings-model");
+    const chatSelect = document.getElementById("chat-model-select");
+    if (settingsModel && chatSelect) {
+        chatSelect.innerHTML = settingsModel.innerHTML;
+    }
+
     loadSettings();
     loadHistory();
     checkDaemonStatus();
@@ -112,19 +119,21 @@ async function loadSettings() {
             // Render key list and select boxes
             renderKeys(keysCache, settings.active_gemini_key_id, settings.active_kimi_key_id, settings.active_openrouter_key_id);
             
-            if (settings.model) {
-                document.getElementById("settings-model").value = settings.model;
-                
-                // Copy options to the header model select
-                const chatSelect = document.getElementById("chat-model-select");
-                if (chatSelect) {
-                    chatSelect.innerHTML = document.getElementById("settings-model").innerHTML;
-                    if (!chatSessionModel) {
-                        chatSessionModel = settings.model;
-                        chatSelect.value = chatSessionModel;
-                    }
-                }
+            const modelToSet = settings.model || "gemini-3.1-flash-lite";
+            const settingsModel = document.getElementById("settings-model");
+            if (settingsModel) {
+                settingsModel.value = modelToSet;
             }
+            
+            const chatSelect = document.getElementById("chat-model-select");
+            if (chatSelect) {
+                chatSelect.innerHTML = settingsModel ? settingsModel.innerHTML : chatSelect.innerHTML;
+                if (!chatSessionModel) {
+                    chatSessionModel = modelToSet;
+                }
+                chatSelect.value = chatSessionModel;
+            }
+            
             if (settings.guardrail) {
                 document.getElementById("settings-guardrail").value = settings.guardrail;
             }
